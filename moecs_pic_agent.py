@@ -136,9 +136,10 @@ def run_search(page: Page) -> None:
 
     search_button.click()
     try:
-        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_load_state("domcontentloaded", timeout=7000)
     except PlaywrightTimeoutError:
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        # Best effort: continue and let downstream selectors decide readiness.
+        pass
 
 
 def get_result_rows(page: Page) -> List[Locator]:
@@ -190,7 +191,7 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]
     before_url = page.url
     try:
         link.click()
-        page.wait_for_load_state("networkidle", timeout=10000)
+        page.wait_for_load_state("domcontentloaded", timeout=6000)
     except PlaywrightTimeoutError:
         pass
 
@@ -203,10 +204,10 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]
     reason = reason2 if score2 >= detail_score else detail_reason
     try:
         if page.url != before_url:
-            page.go_back(timeout=15000)
-            page.wait_for_load_state("networkidle", timeout=15000)
+            page.go_back(timeout=7000)
+            page.wait_for_load_state("domcontentloaded", timeout=7000)
         else:
-            page.go_back(timeout=8000)
+            page.go_back(timeout=5000)
     except Exception:
         back_button = first_visible(
             page,
@@ -274,16 +275,26 @@ def run_lookup(
 
     results: List[MatchReview] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=not effective_headful,
-            slow_mo=slow_mo_ms,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
-        )
-        ctx = browser.new_context()
-        page = ctx.new_page()
-
+        browser = None
+        page = None
         total = len(names)
+        restart_every = 15
+
         for idx, name in enumerate(names, start=1):
+            needs_restart = page is None or (idx - 1) % restart_every == 0
+            if needs_restart:
+                if browser is not None:
+                    browser.close()
+                browser = p.chromium.launch(
+                    headless=not effective_headful,
+                    slow_mo=slow_mo_ms,
+                    args=["--disable-dev-shm-usage", "--no-sandbox"],
+                )
+                ctx = browser.new_context()
+                page = ctx.new_page()
+                page.set_default_timeout(6000)
+                page.set_default_navigation_timeout(10000)
+
             try:
                 result = lookup_name(page, name)
             except Exception as exc:
@@ -300,7 +311,8 @@ def run_lookup(
             if progress_callback:
                 progress_callback(idx, total, result)
 
-        browser.close()
+        if browser is not None:
+            browser.close()
 
     return results
 

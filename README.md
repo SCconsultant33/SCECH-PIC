@@ -43,6 +43,11 @@ After deployment, your day-to-day usage is just: open URL -> upload CSV -> run l
 
 On Render, the app must run Playwright in headless mode (no visible browser). This repo now auto-forces headless mode in hosted environments, even if a headful toggle was previously enabled.
 
+### Large batch runs (30+ names)
+
+The lookup engine now uses shorter waits and periodically refreshes the browser session during long jobs to reduce hangs in hosted environments.
+If you still hit runtime limits on your hosting plan, run in smaller batches (for example 20-30 names per file) and combine the CSV outputs.
+
 ## Option A: Web app (recommended)
 
 Start the app:
