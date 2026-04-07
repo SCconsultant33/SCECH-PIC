@@ -29,7 +29,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 ACTIVE_HINTS = ["active", "valid", "current"]
 COUNSELING_HINTS = ["school counselor", "school counselling", "counselor", "counselling", "guidance counselor"]
 ENDORSEMENT_HINTS = ["endorsement", "(nt)", " nt ", "nt)", "(nt"]
-PIC_REGEX = re.compile(r"\bPIC\s*[:#-]?\s*(\d{4,})\b", re.IGNORECASE)
+PIC_REGEX = re.compile(r"PIC\s*[:#-]?\s*(\d{4,})", re.IGNORECASE)
 
 
 @dataclass
@@ -134,8 +134,11 @@ def run_search(page: Page) -> None:
     if not search_button:
         raise RuntimeError("Could not find Search button")
 
-    with page.expect_load_state("networkidle", timeout=15000):
-        search_button.click()
+    search_button.click()
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except PlaywrightTimeoutError:
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
 
 
 def get_result_rows(page: Page) -> List[Locator]:
@@ -196,11 +199,24 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str]:
 
     score = max(detail_score, score2)
     reason = reason2 if score2 >= detail_score else detail_reason
-    if page.url != before_url:
-        page.go_back(timeout=15000)
-        page.wait_for_load_state("networkidle", timeout=15000)
-    else:
-        page.go_back(timeout=8000)
+    try:
+        if page.url != before_url:
+            page.go_back(timeout=15000)
+            page.wait_for_load_state("networkidle", timeout=15000)
+        else:
+            page.go_back(timeout=8000)
+    except Exception:
+        back_button = first_visible(
+            page,
+            [
+                "input[type='submit'][value='Back']",
+                "button:has-text('Back')",
+                "input[type='button'][value='Back']",
+            ],
+        )
+        if back_button:
+            back_button.click()
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
 
     return score, reason, row_text
 
