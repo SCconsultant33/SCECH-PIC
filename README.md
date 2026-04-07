@@ -25,6 +25,20 @@ python -m pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
+## Hosted standalone web app (recommended for no local setup)
+
+You can deploy this once to a cloud service (for example Render) and then use it from your browser without installing Python locally.
+
+### Deploy on Render
+
+1. Push this repo to GitHub.
+2. In Render, create a new **Web Service** from the repo.
+3. Render will detect `render.yaml` + `Dockerfile` and build automatically.
+4. Set an environment variable `APP_ACCESS_KEY` in Render (so only you can use it).
+5. Open your Render URL and enter the access key.
+
+After deployment, your day-to-day usage is just: open URL -> upload CSV -> run lookup -> download results.
+
 ## Option A: Web app (recommended)
 
 Start the app:

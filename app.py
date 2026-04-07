@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 
 import streamlit as st
 
@@ -12,6 +13,14 @@ from moecs_pic_agent import MatchReview, parse_names_from_reader, run_lookup
 
 
 st.set_page_config(page_title="MOECS PIC Lookup", layout="wide")
+
+required_key = os.getenv("APP_ACCESS_KEY", "").strip()
+if required_key:
+    entered_key = st.text_input("Access key", type="password")
+    if entered_key != required_key:
+        st.warning("Enter your access key to use this app.")
+        st.stop()
+
 st.title("MOECS PIC Lookup")
 st.caption("Upload a CSV with first_name,last_name and run lookups without using the terminal.")
 
