@@ -39,6 +39,18 @@ Then open the URL Streamlit prints (usually `http://localhost:8501`), upload you
 
 If you're on Windows, you can also double-click `launch_ui.bat`.
 
+### If `launch_ui.bat` says "Python was not found"
+
+That means Python is not installed (or not on PATH) on Windows yet. Install Python 3, then run:
+
+```bash
+py -3 -m pip install -r requirements.txt
+py -3 -m playwright install chromium
+```
+
+After that, run `launch_ui.bat` again.
+
+
 ## Option B: CLI usage
 
 1. Create your input file, for example `names.csv`:
