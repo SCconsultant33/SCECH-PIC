@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Streamlit UI for the MOECS PIC lookup agent."""
+
+from __future__ import annotations
+
+import csv
+import io
+
+import streamlit as st
+
+from moecs_pic_agent import MatchReview, parse_names_from_reader, run_lookup
+
+
+st.set_page_config(page_title="MOECS PIC Lookup", layout="wide")
+st.title("MOECS PIC Lookup")
+st.caption("Upload a CSV with first_name,last_name and run lookups without using the terminal.")
+
+uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+headful = st.checkbox("Show browser while running", value=False)
+slow_mo_ms = st.number_input("Slow motion (milliseconds)", min_value=0, max_value=3000, value=0, step=100)
+run_clicked = st.button("Run Lookup", type="primary", disabled=uploaded_file is None)
+
+
+def to_csv_bytes(rows: list[MatchReview]) -> bytes:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=["first_name", "last_name", "status", "pic", "reason", "matched_entry"])
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "first_name": row.first_name,
+                "last_name": row.last_name,
+                "status": row.status,
+                "pic": row.pic,
+                "reason": row.reason,
+                "matched_entry": row.matched_entry,
+            }
+        )
+    return buf.getvalue().encode("utf-8")
+
+
+if run_clicked and uploaded_file is not None:
+    try:
+        text = uploaded_file.getvalue().decode("utf-8-sig")
+        names = parse_names_from_reader(csv.DictReader(io.StringIO(text)))
+    except Exception as exc:
+        st.error(f"Could not parse CSV: {exc}")
+    else:
+        progress = st.progress(0)
+        status = st.empty()
+
+        def on_progress(current: int, total: int, result: MatchReview) -> None:
+            progress.progress(current / total)
+            status.info(f"{current}/{total} complete: {result.first_name} {result.last_name} -> {result.status} {result.pic}")
+
+        with st.spinner("Running lookup automation..."):
+            rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
+
+        status.success("Lookup run complete.")
+        table_rows = [
+            {
+                "first_name": r.first_name,
+                "last_name": r.last_name,
+                "status": r.status,
+                "pic": r.pic,
+                "reason": r.reason,
+            }
+            for r in rows
+        ]
+        st.subheader("Results")
+        st.dataframe(table_rows, use_container_width=True)
+        st.download_button(
+            "Download full results CSV",
+            data=to_csv_bytes(rows),
+            file_name="pic_lookup_results.csv",
+            mime="text/csv",
+        )
+        st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")

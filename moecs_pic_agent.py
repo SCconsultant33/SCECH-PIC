@@ -19,35 +19,15 @@ import argparse
 import csv
 import re
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
-
-ACTIVE_HINTS = [
-    "active",
-    "valid",
-    "current",
-]
-
-COUNSELING_HINTS = [
-    "school counselor",
-    "school counselling",
-    "counselor",
-    "counselling",
-    "guidance counselor",
-]
-
-ENDORSEMENT_HINTS = [
-    "endorsement",
-    "(nt)",
-    " nt ",
-    "nt)",
-    "(nt",
-]
-
+ACTIVE_HINTS = ["active", "valid", "current"]
+COUNSELING_HINTS = ["school counselor", "school counselling", "counselor", "counselling", "guidance counselor"]
+ENDORSEMENT_HINTS = ["endorsement", "(nt)", " nt ", "nt)", "(nt"]
 PIC_REGEX = re.compile(r"\bPIC\s*[:#-]?\s*(\d{4,})\b", re.IGNORECASE)
 
 
@@ -69,46 +49,35 @@ class MatchReview:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lookup PIC numbers from MOECS.")
-    parser.add_argument(
-        "--input",
-        required=True,
-        help="Path to CSV file with headers: first_name,last_name",
-    )
-    parser.add_argument(
-        "--output",
-        default="pic_lookup_results.csv",
-        help="Path to output CSV file.",
-    )
-    parser.add_argument(
-        "--headful",
-        action="store_true",
-        help="Show browser while running.",
-    )
-    parser.add_argument(
-        "--slow-mo-ms",
-        type=int,
-        default=0,
-        help="Delay Playwright operations (ms). Useful for debugging.",
-    )
+    parser.add_argument("--input", required=True, help="Path to CSV file with headers: first_name,last_name")
+    parser.add_argument("--output", default="pic_lookup_results.csv", help="Path to output CSV file.")
+    parser.add_argument("--headful", action="store_true", help="Show browser while running.")
+    parser.add_argument("--slow-mo-ms", type=int, default=0, help="Delay Playwright operations (ms). Useful for debugging.")
     return parser.parse_args()
 
 
-def load_names(csv_path: Path) -> List[NameRecord]:
+def parse_names_from_reader(reader: csv.DictReader) -> List[NameRecord]:
     records: List[NameRecord] = []
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        expected = {"first_name", "last_name"}
-        if not expected.issubset({(h or "").strip() for h in reader.fieldnames or []}):
-            raise ValueError("Input CSV must contain headers: first_name,last_name")
-        for row in reader:
-            first = (row.get("first_name") or "").strip()
-            last = (row.get("last_name") or "").strip()
-            if not first or not last:
-                continue
-            records.append(NameRecord(first_name=first, last_name=last))
+    expected = {"first_name", "last_name"}
+    if not expected.issubset({(h or "").strip() for h in reader.fieldnames or []}):
+        raise ValueError("Input CSV must contain headers: first_name,last_name")
+
+    for row in reader:
+        first = (row.get("first_name") or "").strip()
+        last = (row.get("last_name") or "").strip()
+        if not first or not last:
+            continue
+        records.append(NameRecord(first_name=first, last_name=last))
+
     if not records:
         raise ValueError("No valid names found in input CSV")
+
     return records
+
+
+def load_names(csv_path: Path) -> List[NameRecord]:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        return parse_names_from_reader(csv.DictReader(f))
 
 
 def first_visible(page: Page, selectors: Iterable[str]) -> Optional[Locator]:
@@ -169,16 +138,8 @@ def run_search(page: Page) -> None:
 
 
 def get_result_rows(page: Page) -> List[Locator]:
-    table = first_visible(
-        page,
-        [
-            "table:has(th:has-text('PIC'))",
-            "table:has(th:has-text('Credential'))",
-            "table:has-text('PIC')",
-        ],
-    )
+    table = first_visible(page, ["table:has(th:has-text('PIC'))", "table:has(th:has-text('Credential'))", "table:has-text('PIC')"])
     if not table:
-        # fallback: use all data rows and trust scoring later.
         rows = page.locator("table tr").all()
         return [r for r in rows if r.locator("td").count() > 1]
 
@@ -190,7 +151,6 @@ def extract_pic(text: str) -> str:
     m = PIC_REGEX.search(text)
     if m:
         return m.group(1)
-    # fallback: most likely long number
     candidates = re.findall(r"\b\d{5,}\b", text)
     return candidates[0] if candidates else ""
 
@@ -203,11 +163,9 @@ def score_detail(detail_text: str) -> tuple[int, str]:
     if any(h in t for h in COUNSELING_HINTS):
         score += 3
         reasons.append("counseling keyword found")
-
     if any(h in t for h in ENDORSEMENT_HINTS):
         score += 2
         reasons.append("endorsement/NT hint found")
-
     if any(h in t for h in ACTIVE_HINTS):
         score += 2
         reasons.append("active status hint found")
@@ -241,7 +199,6 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str]:
         page.go_back(timeout=15000)
         page.wait_for_load_state("networkidle", timeout=15000)
     else:
-        # ASP.NET postback may keep same URL; attempt a generic back action.
         page.go_back(timeout=8000)
 
     return score, reason, row_text
@@ -283,35 +240,21 @@ def lookup_name(page: Page, name: NameRecord) -> MatchReview:
     return choose_best_match(page, name.first_name, name.last_name)
 
 
-def save_results(path: Path, rows: List[MatchReview]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "first_name",
-                "last_name",
-                "status",
-                "pic",
-                "reason",
-                "matched_entry",
-            ],
-        )
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(asdict(row))
-
-
-def main() -> int:
-    args = parse_args()
-    names = load_names(Path(args.input))
-
+def run_lookup(
+    names: List[NameRecord],
+    *,
+    headful: bool = False,
+    slow_mo_ms: int = 0,
+    progress_callback: Optional[Callable[[int, int, MatchReview], None]] = None,
+) -> List[MatchReview]:
     results: List[MatchReview] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not args.headful, slow_mo=args.slow_mo_ms)
+        browser = p.chromium.launch(headless=not headful, slow_mo=slow_mo_ms)
         ctx = browser.new_context()
         page = ctx.new_page()
 
-        for name in names:
+        total = len(names)
+        for idx, name in enumerate(names, start=1):
             try:
                 result = lookup_name(page, name)
             except Exception as exc:
@@ -323,10 +266,31 @@ def main() -> int:
                     matched_entry="",
                     reason=str(exc),
                 )
-            print(f"{name.first_name} {name.last_name}: {result.status} {result.pic} ({result.reason})")
+
             results.append(result)
+            if progress_callback:
+                progress_callback(idx, total, result)
 
         browser.close()
+
+    return results
+
+
+def save_results(path: Path, rows: List[MatchReview]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["first_name", "last_name", "status", "pic", "reason", "matched_entry"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row))
+
+
+def main() -> int:
+    args = parse_args()
+    names = load_names(Path(args.input))
+    results = run_lookup(names, headful=args.headful, slow_mo_ms=args.slow_mo_ms)
+
+    for result in results:
+        print(f"{result.first_name} {result.last_name}: {result.status} {result.pic} ({result.reason})")
 
     save_results(Path(args.output), results)
     return 0

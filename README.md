@@ -1,6 +1,9 @@
 # MOECS PIC Lookup Agent
 
-This project provides a small automation script that can process a list of names and attempt to find each person's PIC number from the Michigan MOECS public credential search.
+This project provides two ways to run the same lookup automation:
+
+1. **Web app (no command-line workflow after startup)** via Streamlit.
+2. **CLI script** for terminal users.
 
 ## What it does
 
@@ -15,16 +18,30 @@ This project provides a small automation script that can process a list of names
 
 Because duplicate-name disambiguation is heuristic (text-based), you should manually review any row marked `REVIEW_REQUIRED`.
 
-## Usage
-
-1. Install dependencies:
+## Setup (one time)
 
 ```bash
 python -m pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-2. Create your input file, for example `names.csv`:
+## Option A: Web app (recommended)
+
+Start the app:
+
+```bash
+python -m streamlit run app.py
+```
+
+Then open the URL Streamlit prints (usually `http://localhost:8501`), upload your CSV, and click **Run Lookup**.
+
+### Windows shortcut launcher
+
+If you're on Windows, you can also double-click `launch_ui.bat`.
+
+## Option B: CLI usage
+
+1. Create your input file, for example `names.csv`:
 
 ```csv
 first_name,last_name
@@ -32,7 +49,7 @@ Alex,Smith
 Jamie,Johnson
 ```
 
-3. Run the script:
+2. Run:
 
 ```bash
 python moecs_pic_agent.py --input names.csv --output results.csv --headful
