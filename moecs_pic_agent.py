@@ -178,13 +178,14 @@ def score_detail(detail_text: str) -> tuple[int, str]:
     return score, reason
 
 
-def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str]:
+def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]:
     row_text = row.inner_text().strip()
     detail_score, detail_reason = score_detail(row_text)
 
     link = row.locator("a").first
+    row_pic = extract_pic(row_text)
     if link.count() == 0:
-        return detail_score, detail_reason, row_text
+        return detail_score, detail_reason, row_text, row_pic
 
     before_url = page.url
     try:
@@ -195,6 +196,7 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str]:
 
     time.sleep(0.2)
     full_text = page.locator("body").inner_text(timeout=4000)
+    detail_pic = extract_pic(full_text)
     score2, reason2 = score_detail(full_text)
 
     score = max(detail_score, score2)
@@ -218,7 +220,7 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str]:
             back_button.click()
             page.wait_for_load_state("domcontentloaded", timeout=10000)
 
-    return score, reason, row_text
+    return score, reason, row_text, (detail_pic or row_pic)
 
 
 def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchReview:
@@ -229,12 +231,13 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
     ranked: list[tuple[int, str, str]] = []
     for row in rows:
         try:
-            score, reason, row_text = open_and_score_detail(page, row)
+            score, reason, row_text, extracted_pic = open_and_score_detail(page, row)
         except Exception as exc:
             row_text = row.inner_text().strip()
             score, reason = score_detail(row_text)
             reason = f"{reason}; detail check error: {exc}"
-        pic = extract_pic(row_text)
+            extracted_pic = extract_pic(row_text)
+        pic = extracted_pic or extract_pic(row_text)
         ranked.append((score, reason, f"{row_text}\nPIC={pic}"))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
