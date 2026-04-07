@@ -39,6 +39,10 @@ You can deploy this once to a cloud service (for example Render) and then use it
 
 After deployment, your day-to-day usage is just: open URL -> upload CSV -> run lookup -> download results.
 
+### Render error: "Looks like you launched a headed browser without having a XServer running"
+
+On Render, the app must run Playwright in headless mode (no visible browser). This repo now auto-forces headless mode in hosted environments, even if a headful toggle was previously enabled.
+
 ## Option A: Web app (recommended)
 
 Start the app:

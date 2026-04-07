@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -247,9 +248,18 @@ def run_lookup(
     slow_mo_ms: int = 0,
     progress_callback: Optional[Callable[[int, int, MatchReview], None]] = None,
 ) -> List[MatchReview]:
+    # Cloud Linux runtimes (like Render) usually have no DISPLAY/X server,
+    # so force headless mode there even if a UI toggle was set to headful.
+    has_display = bool(os.environ.get("DISPLAY"))
+    effective_headful = headful and (os.name == "nt" or has_display)
+
     results: List[MatchReview] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headful, slow_mo=slow_mo_ms)
+        browser = p.chromium.launch(
+            headless=not effective_headful,
+            slow_mo=slow_mo_ms,
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
         ctx = browser.new_context()
         page = ctx.new_page()
 

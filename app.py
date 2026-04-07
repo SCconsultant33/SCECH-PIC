@@ -25,7 +25,12 @@ st.title("MOECS PIC Lookup")
 st.caption("Upload a CSV with first_name,last_name and run lookups without using the terminal.")
 
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-headful = st.checkbox("Show browser while running", value=False)
+is_hosted = bool(os.getenv("RENDER")) or bool(os.getenv("PORT"))
+if is_hosted:
+    st.info("Hosted mode detected: browser UI is disabled, running in headless mode.")
+    headful = False
+else:
+    headful = st.checkbox("Show browser while running", value=False)
 slow_mo_ms = st.number_input("Slow motion (milliseconds)", min_value=0, max_value=3000, value=0, step=100)
 run_clicked = st.button("Run Lookup", type="primary", disabled=uploaded_file is None)
 
