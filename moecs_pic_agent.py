@@ -225,6 +225,9 @@ def analyze_credential(row_text: str, detail_text: str) -> tuple[int, str, bool]
     else:
         score -= 30
         reasons.append("not clearly current")
+        if is_school_counseling:
+            score -= 90
+            reasons.append("school counseling record appears expired")
 
     if has_permanent:
         score -= 40
@@ -304,13 +307,16 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
             extracted_pic = extract_pic(row_text)
 
         pic = extracted_pic or extract_pic(row_text)
+        if not pic:
+            score -= 80
+            reason = f"{reason}; no PIC on selected record"
         ranked.append((score, reason, row_text, pic, counseling_related))
 
         # Early return when we have a strong counseling-related hit with a PIC.
         if counseling_related and pic and score >= 220:
             return MatchReview(first_name, last_name, "LIKELY_MATCH", pic, f"{row_text}\nPIC={pic}", reason)
 
-    ranked.sort(key=lambda x: x[0], reverse=True)
+    ranked.sort(key=lambda x: (bool(x[3]), x[0]), reverse=True)
     _, best_reason, best_row_text, best_pic, best_is_counseling = ranked[0]
 
     if not best_pic:

@@ -34,6 +34,9 @@ else:
 slow_mo_ms = st.number_input("Slow motion (milliseconds)", min_value=0, max_value=3000, value=0, step=100)
 run_clicked = st.button("Run Lookup", type="primary", disabled=uploaded_file is None)
 
+if "last_results" not in st.session_state:
+    st.session_state.last_results = []
+
 
 def to_csv_bytes(rows: list[MatchReview]) -> bytes:
     buf = io.StringIO()
@@ -69,24 +72,27 @@ if run_clicked and uploaded_file is not None:
 
         with st.spinner("Running lookup automation..."):
             rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
+            st.session_state.last_results = rows
 
         status.success("Lookup run complete.")
-        table_rows = [
-            {
-                "first_name": r.first_name,
-                "last_name": r.last_name,
-                "status": r.status,
-                "pic": r.pic,
-                "reason": r.reason,
-            }
-            for r in rows
-        ]
-        st.subheader("Results")
-        st.dataframe(table_rows, use_container_width=True)
-        st.download_button(
-            "Download full results CSV",
-            data=to_csv_bytes(rows),
-            file_name="pic_lookup_results.csv",
-            mime="text/csv",
-        )
-        st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")
+
+if st.session_state.last_results:
+    table_rows = [
+        {
+            "first_name": r.first_name,
+            "last_name": r.last_name,
+            "status": r.status,
+            "pic": r.pic,
+            "reason": r.reason,
+        }
+        for r in st.session_state.last_results
+    ]
+    st.subheader("Results")
+    st.dataframe(table_rows, use_container_width=True)
+    st.download_button(
+        "Download full results CSV",
+        data=to_csv_bytes(st.session_state.last_results),
+        file_name="pic_lookup_results.csv",
+        mime="text/csv",
+    )
+    st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")
