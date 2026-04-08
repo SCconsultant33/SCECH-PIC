@@ -256,6 +256,15 @@ def initial_matches(expected_initial: Optional[str], text: str) -> bool:
     return first_name[0].lower() == expected_initial.lower()
 
 
+def initial_matches_name(expected_initial: Optional[str], full_name: str) -> bool:
+    if not expected_initial:
+        return True
+    tokens = [t for t in full_name.strip().split() if t]
+    if not tokens:
+        return False
+    return tokens[0][0].lower() == expected_initial.lower()
+
+
 def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str, bool, str]:
     row_text = row.inner_text().strip()
     detail_score, detail_reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
@@ -303,29 +312,65 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str,
 
 
 def choose_best_match(page: Page, first_name: str, last_name: str, expected_initial: Optional[str] = None) -> MatchReview:
-    rows = get_result_rows(page)
-    if not rows:
+    ranked: list[tuple[int, str, str, bool]] = []
+    max_pages = 15
+    page_num = 1
+
+    while page_num <= max_pages:
+        rows = get_result_rows(page)
+        if not rows and page_num == 1:
+            return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
+
+        current_name = ""
+        for row in rows:
+            try:
+                tds = row.locator("td")
+                if tds.count() >= 3:
+                    name_cell = tds.nth(0).inner_text().strip()
+                    if name_cell:
+                        current_name = name_cell
+
+                if expected_initial and current_name and not initial_matches_name(expected_initial, current_name):
+                    continue
+
+                score, reason, row_text, extracted_pic, counseling_related, inspect_text = open_and_score_detail(page, row)
+            except Exception as exc:
+                row_text = row.inner_text().strip()
+                score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
+                reason = f"{reason}; detail check error: {exc}"
+                extracted_pic = extract_pic(row_text)
+                inspect_text = row_text
+
+            if expected_initial and not initial_matches(expected_initial, inspect_text):
+                score -= 120
+                reason = f"{reason}; first-initial mismatch"
+
+            pic = extracted_pic or extract_pic(row_text)
+            display_name = f"NAME={current_name}\n" if current_name else ""
+            ranked.append((score, reason, f"{display_name}{row_text}\nPIC={pic}", counseling_related))
+
+        next_link = first_visible(
+            page,
+            [
+                "a:has-text('Next')",
+                "a[title*='Next' i]",
+                "a:text-is('>')",
+            ],
+        )
+        if not next_link:
+            break
+        try:
+            next_link.click()
+            page.wait_for_load_state("domcontentloaded", timeout=7000)
+            page_num += 1
+        except Exception:
+            break
+
+    if not ranked:
         return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
 
-    ranked: list[tuple[int, str, str, bool]] = []
-    for row in rows:
-        try:
-            score, reason, row_text, extracted_pic, counseling_related, inspect_text = open_and_score_detail(page, row)
-        except Exception as exc:
-            row_text = row.inner_text().strip()
-            score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
-            reason = f"{reason}; detail check error: {exc}"
-            extracted_pic = extract_pic(row_text)
-            inspect_text = row_text
-
-        if not initial_matches(expected_initial, inspect_text):
-            score -= 120
-            reason = f"{reason}; first-initial mismatch"
-        pic = extracted_pic or extract_pic(row_text)
-        ranked.append((score, reason, f"{row_text}\nPIC={pic}", counseling_related))
-
     ranked.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_reason, best_entry, best_is_counseling = ranked[0]
+    _, best_reason, best_entry, best_is_counseling = ranked[0]
     best_pic = extract_pic(best_entry)
 
     if not best_pic:

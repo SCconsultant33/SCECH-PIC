@@ -107,3 +107,5 @@ The output CSV includes:
 - `pic`
 - `reason`
 - `matched_entry`
+
+When exact first-name matching fails, the agent retries by last name and can return `NO_FULL_NAME_MATCH` if it finds a same-initial candidate (including across paged result lists).
