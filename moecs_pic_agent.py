@@ -141,6 +141,34 @@ def run_search(page: Page) -> None:
     except PlaywrightTimeoutError:
         # Best effort: continue and let downstream selectors decide readiness.
         pass
+    set_max_page_size(page)
+
+
+def set_max_page_size(page: Page) -> None:
+    page_size_select = first_visible(
+        page,
+        [
+            "select[name*='PageSize' i]",
+            "select[id*='PageSize' i]",
+            "select:near(:text('Page Size'))",
+        ],
+    )
+    if not page_size_select:
+        return
+    try:
+        options = page_size_select.locator("option").all_inner_texts()
+        numeric_options = sorted({int(o.strip()) for o in options if o.strip().isdigit()})
+        if not numeric_options:
+            return
+        max_value = str(numeric_options[-1])
+        current = page_size_select.input_value()
+        if current == max_value:
+            return
+        page_size_select.select_option(value=max_value)
+        page.wait_for_load_state("domcontentloaded", timeout=7000)
+    except Exception:
+        # Non-fatal enhancement only.
+        return
 
 
 def get_result_rows(page: Page) -> List[Locator]:
@@ -322,28 +350,50 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str,
 
 
 def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchReview:
-    rows = get_result_rows(page)
-    if not rows:
-        return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
-
     ranked: list[tuple[bool, int, int, str, str, str, bool]] = []
-    for row in rows[:12]:
-        try:
-            score, reason, row_text, extracted_pic, counseling_related, detail_text = open_and_score_detail(page, row)
-        except Exception as exc:
-            row_text = row.inner_text().strip()
-            score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
-            reason = f"{reason}; detail check error: {exc}"
-            extracted_pic = extract_pic(row_text)
-            detail_text = row_text
+    max_pages = 15
+    page_num = 1
+    while page_num <= max_pages:
+        rows = get_result_rows(page)
+        if not rows and page_num == 1:
+            return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
+        for row in rows:
+            try:
+                score, reason, row_text, extracted_pic, counseling_related, detail_text = open_and_score_detail(page, row)
+            except Exception as exc:
+                row_text = row.inner_text().strip()
+                score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
+                reason = f"{reason}; detail check error: {exc}"
+                extracted_pic = extract_pic(row_text)
+                detail_text = row_text
 
-        pic = extracted_pic or extract_pic(row_text)
-        if not pic:
-            score -= 80
-            reason = f"{reason}; no PIC on selected record"
-        priority_bucket = credential_priority_bucket(row_text=row_text, detail_text=detail_text)
-        reason = f"{reason}; priority_bucket={priority_bucket}"
-        ranked.append((bool(pic), priority_bucket, score, reason, row_text, pic, counseling_related))
+            pic = extracted_pic or extract_pic(row_text)
+            if not pic:
+                score -= 80
+                reason = f"{reason}; no PIC on selected record"
+            priority_bucket = credential_priority_bucket(row_text=row_text, detail_text=detail_text)
+            reason = f"{reason}; priority_bucket={priority_bucket}"
+            ranked.append((bool(pic), priority_bucket, score, reason, row_text, pic, counseling_related))
+
+        next_link = first_visible(
+            page,
+            [
+                "a:has-text('Next')",
+                "a[title*='Next' i]",
+                "a:text-is('>')",
+            ],
+        )
+        if not next_link:
+            break
+        try:
+            next_link.click()
+            page.wait_for_load_state("domcontentloaded", timeout=7000)
+            page_num += 1
+        except Exception:
+            break
+
+    if not ranked:
+        return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
 
     ranked.sort(key=lambda x: (not x[0], x[1], -x[2]))
     _, _, _, best_reason, best_row_text, best_pic, best_is_counseling = ranked[0]

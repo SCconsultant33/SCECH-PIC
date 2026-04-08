@@ -107,3 +107,5 @@ The output CSV includes:
 - `pic`
 - `reason`
 - `matched_entry`
+
+For duplicate-name results, the matcher scans all visible rows (and paged results when present), prioritizing current School Counselor License/Renewal records before other credential types.
