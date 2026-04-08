@@ -245,6 +245,36 @@ def analyze_credential(row_text: str, detail_text: str) -> tuple[int, str, bool]
     return score, "; ".join(reasons), counseling_related
 
 
+def credential_priority_bucket(row_text: str, detail_text: str) -> int:
+    """
+    Lower is better:
+      0 -> current school counseling license/renewal
+      1 -> school counseling license/renewal (not clearly current)
+      2 -> current teaching certificate with NT endorsement
+      3 -> teaching certificate with NT endorsement (not clearly current)
+      4 -> current teaching certificate
+      9 -> other
+    """
+    blob = f"{row_text}\n{detail_text}".lower()
+    expires_on = extract_expiration_date(detail_text)
+    is_current = (expires_on is not None and expires_on >= date.today()) or (" active " in f" {blob} " and "expired" not in blob)
+    is_school_counseling = "school counselor license" in blob or "school counselor license renewal" in blob
+    has_nt = "(nt)" in blob or " nt " in f" {blob} "
+    is_teaching_certificate = "teaching certificate" in blob or "certificate type" in blob
+
+    if is_school_counseling and is_current:
+        return 0
+    if is_school_counseling:
+        return 1
+    if has_nt and is_teaching_certificate and is_current:
+        return 2
+    if has_nt and is_teaching_certificate:
+        return 3
+    if is_teaching_certificate and is_current:
+        return 4
+    return 9
+
+
 def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str, bool, str]:
     row_text = row.inner_text().strip()
     detail_score, detail_reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
@@ -296,28 +326,27 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
     if not rows:
         return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
 
-    ranked: list[tuple[int, str, str, str, bool]] = []
+    ranked: list[tuple[bool, int, int, str, str, str, bool]] = []
     for row in rows[:12]:
         try:
-            score, reason, row_text, extracted_pic, counseling_related, _ = open_and_score_detail(page, row)
+            score, reason, row_text, extracted_pic, counseling_related, detail_text = open_and_score_detail(page, row)
         except Exception as exc:
             row_text = row.inner_text().strip()
             score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
             reason = f"{reason}; detail check error: {exc}"
             extracted_pic = extract_pic(row_text)
+            detail_text = row_text
 
         pic = extracted_pic or extract_pic(row_text)
         if not pic:
             score -= 80
             reason = f"{reason}; no PIC on selected record"
-        ranked.append((score, reason, row_text, pic, counseling_related))
+        priority_bucket = credential_priority_bucket(row_text=row_text, detail_text=detail_text)
+        reason = f"{reason}; priority_bucket={priority_bucket}"
+        ranked.append((bool(pic), priority_bucket, score, reason, row_text, pic, counseling_related))
 
-        # Early return when we have a strong counseling-related hit with a PIC.
-        if counseling_related and pic and score >= 220:
-            return MatchReview(first_name, last_name, "LIKELY_MATCH", pic, f"{row_text}\nPIC={pic}", reason)
-
-    ranked.sort(key=lambda x: (bool(x[3]), x[0]), reverse=True)
-    _, best_reason, best_row_text, best_pic, best_is_counseling = ranked[0]
+    ranked.sort(key=lambda x: (not x[0], x[1], -x[2]))
+    _, _, _, best_reason, best_row_text, best_pic, best_is_counseling = ranked[0]
 
     if not best_pic:
         return MatchReview(first_name, last_name, "NOT_FOUND", "", best_row_text, best_reason)
