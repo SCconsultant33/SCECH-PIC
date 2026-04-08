@@ -103,7 +103,7 @@ The output CSV includes:
 
 - `first_name`
 - `last_name`
-- `status` (`LIKELY_MATCH`, `SINGLE_MATCH`, `REVIEW_REQUIRED`, `NOT_FOUND`, or `ERROR`)
+- `status` (`LIKELY_MATCH`, `REVIEW_REQUIRED`, `NOT_FOUND`, or `ERROR`)
 - `pic`
 - `reason`
 - `matched_entry`

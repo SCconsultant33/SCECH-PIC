@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import date, datetime
 import os
 import re
 import time
@@ -24,7 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from playwright.sync_api import Error as PlaywrightError, Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 ACTIVE_HINTS = ["active", "valid", "current"]
 COUNSELING_HINTS = ["school counselor", "school counselling", "counselor", "counselling", "guidance counselor"]
@@ -179,14 +180,76 @@ def score_detail(detail_text: str) -> tuple[int, str]:
     return score, reason
 
 
-def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]:
+def extract_expiration_date(text: str) -> Optional[date]:
+    m = re.search(r"Expiration Date:\s*(\d{1,2}/\d{1,2}/\d{4})", text, flags=re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%m/%d/%Y").date()
+    except ValueError:
+        return None
+
+
+def analyze_credential(row_text: str, detail_text: str) -> tuple[int, str, bool]:
+    blob = f"{row_text}\n{detail_text}".lower()
+    expires_on = extract_expiration_date(detail_text)
+    today = date.today()
+    is_current = (expires_on is not None and expires_on >= today) or (" active " in f" {blob} " and "expired" not in blob)
+    has_permanent = "permanent" in blob and expires_on is None
+    has_nt = "(nt)" in blob or " nt " in f" {blob} "
+    is_school_counseling = "school counselor license" in blob or "school counselor license renewal" in blob
+    has_counseling_terms = any(k in blob for k in ["school counselor", "school counselling", "counseling", "counselling", "guidance counselor"])
+    is_teaching_certificate = "teaching certificate" in blob or "certificate type" in blob
+
+    score = 0
+    reasons: List[str] = []
+    counseling_related = False
+
+    if is_school_counseling:
+        counseling_related = True
+        score += 140
+        reasons.append("school counseling license/renewal")
+    elif has_counseling_terms:
+        counseling_related = True
+        score += 95
+        reasons.append("counseling-related credential")
+
+    if has_nt:
+        counseling_related = True
+        score += 75
+        reasons.append("NT endorsement found")
+
+    if is_current:
+        score += 45
+        reasons.append("current/active credential")
+    else:
+        score -= 30
+        reasons.append("not clearly current")
+
+    if has_permanent:
+        score -= 40
+        reasons.append("permanent/no expiration")
+
+    if is_teaching_certificate and is_current:
+        score += 30
+        reasons.append("active teaching certificate")
+
+    if expires_on:
+        # Prefer newer expiration dates among otherwise-similar records.
+        score += min(expires_on.year - 2000, 50)
+        reasons.append(f"expires {expires_on.isoformat()}")
+
+    return score, "; ".join(reasons), counseling_related
+
+
+def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str, bool]:
     row_text = row.inner_text().strip()
-    detail_score, detail_reason = score_detail(row_text)
+    detail_score, detail_reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
 
     link = row.locator("a").first
     row_pic = extract_pic(row_text)
     if link.count() == 0:
-        return detail_score, detail_reason, row_text, row_pic
+        return detail_score, detail_reason, row_text, row_pic, counseling_related
 
     before_url = page.url
     try:
@@ -198,10 +261,11 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]
     time.sleep(0.2)
     full_text = page.locator("body").inner_text(timeout=4000)
     detail_pic = extract_pic(full_text)
-    score2, reason2 = score_detail(full_text)
+    score2, reason2, counseling_related2 = analyze_credential(row_text=row_text, detail_text=full_text)
 
     score = max(detail_score, score2)
     reason = reason2 if score2 >= detail_score else detail_reason
+    counseling_related = counseling_related2 if score2 >= detail_score else counseling_related
     try:
         if page.url != before_url:
             page.go_back(timeout=7000)
@@ -221,7 +285,7 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str]
             back_button.click()
             page.wait_for_load_state("domcontentloaded", timeout=10000)
 
-    return score, reason, row_text, (detail_pic or row_pic)
+    return score, reason, row_text, (detail_pic or row_pic), counseling_related
 
 
 def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchReview:
@@ -229,33 +293,40 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
     if not rows:
         return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
 
-    ranked: list[tuple[int, str, str]] = []
+    ranked: list[tuple[int, str, str, bool]] = []
     for row in rows:
         try:
-            score, reason, row_text, extracted_pic = open_and_score_detail(page, row)
+            score, reason, row_text, extracted_pic, counseling_related = open_and_score_detail(page, row)
         except Exception as exc:
             row_text = row.inner_text().strip()
-            score, reason = score_detail(row_text)
+            score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
             reason = f"{reason}; detail check error: {exc}"
             extracted_pic = extract_pic(row_text)
         pic = extracted_pic or extract_pic(row_text)
-        ranked.append((score, reason, f"{row_text}\nPIC={pic}"))
+        ranked.append((score, reason, f"{row_text}\nPIC={pic}", counseling_related))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_reason, best_entry = ranked[0]
+    best_score, best_reason, best_entry, best_is_counseling = ranked[0]
     best_pic = extract_pic(best_entry)
 
     status = "REVIEW_REQUIRED"
-    if best_score >= 5 and best_pic:
+    if best_pic and best_is_counseling:
         status = "LIKELY_MATCH"
-    elif best_pic and len(ranked) == 1:
-        status = "SINGLE_MATCH"
+    elif best_pic:
+        status = "REVIEW_REQUIRED"
 
     return MatchReview(first_name, last_name, status, best_pic, best_entry, best_reason)
 
 
 def lookup_name(page: Page, name: NameRecord) -> MatchReview:
-    page.goto("https://mdoe.state.mi.us/MOECS/PublicCredentialSearch.aspx", wait_until="domcontentloaded")
+    for _ in range(2):
+        try:
+            page.goto("https://mdoe.state.mi.us/MOECS/PublicCredentialSearch.aspx", wait_until="domcontentloaded")
+            break
+        except PlaywrightError as exc:
+            if "interrupted by another navigation" not in str(exc).lower():
+                raise
+            time.sleep(0.2)
     fill_search_form(page, name.first_name, name.last_name)
     run_search(page)
     return choose_best_match(page, name.first_name, name.last_name)
@@ -291,13 +362,17 @@ def run_lookup(
                     args=["--disable-dev-shm-usage", "--no-sandbox"],
                 )
                 ctx = browser.new_context()
+            try:
                 page = ctx.new_page()
                 page.set_default_timeout(6000)
                 page.set_default_navigation_timeout(10000)
-
-            try:
                 result = lookup_name(page, name)
+                page.close()
             except Exception as exc:
+                try:
+                    page.close()
+                except Exception:
+                    pass
                 result = MatchReview(
                     first_name=name.first_name,
                     last_name=name.last_name,
