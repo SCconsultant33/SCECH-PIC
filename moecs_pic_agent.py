@@ -242,29 +242,6 @@ def analyze_credential(row_text: str, detail_text: str) -> tuple[int, str, bool]
     return score, "; ".join(reasons), counseling_related
 
 
-def extract_first_name_from_text(text: str) -> str:
-    m = re.search(r"Name:\s*([A-Za-z'\\-]+)", text, flags=re.IGNORECASE)
-    return (m.group(1).strip() if m else "")
-
-
-def initial_matches(expected_initial: Optional[str], text: str) -> bool:
-    if not expected_initial:
-        return True
-    first_name = extract_first_name_from_text(text)
-    if not first_name:
-        return False
-    return first_name[0].lower() == expected_initial.lower()
-
-
-def initial_matches_name(expected_initial: Optional[str], full_name: str) -> bool:
-    if not expected_initial:
-        return True
-    tokens = [t for t in full_name.strip().split() if t]
-    if not tokens:
-        return False
-    return tokens[0][0].lower() == expected_initial.lower()
-
-
 def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str, bool, str]:
     row_text = row.inner_text().strip()
     detail_score, detail_reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
@@ -311,78 +288,39 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str,
     return score, reason, row_text, (detail_pic or row_pic), counseling_related, full_text
 
 
-def choose_best_match(page: Page, first_name: str, last_name: str, expected_initial: Optional[str] = None) -> MatchReview:
-    ranked: list[tuple[int, str, str, bool]] = []
-    max_pages = 15
-    page_num = 1
-
-    while page_num <= max_pages:
-        rows = get_result_rows(page)
-        if not rows and page_num == 1:
-            return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
-
-        current_name = ""
-        for row in rows:
-            try:
-                tds = row.locator("td")
-                if tds.count() >= 3:
-                    name_cell = tds.nth(0).inner_text().strip()
-                    if name_cell:
-                        current_name = name_cell
-
-                if expected_initial and current_name and not initial_matches_name(expected_initial, current_name):
-                    continue
-
-                score, reason, row_text, extracted_pic, counseling_related, inspect_text = open_and_score_detail(page, row)
-            except Exception as exc:
-                row_text = row.inner_text().strip()
-                score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
-                reason = f"{reason}; detail check error: {exc}"
-                extracted_pic = extract_pic(row_text)
-                inspect_text = row_text
-
-            if expected_initial and not initial_matches(expected_initial, inspect_text):
-                score -= 120
-                reason = f"{reason}; first-initial mismatch"
-
-            pic = extracted_pic or extract_pic(row_text)
-            display_name = f"NAME={current_name}\n" if current_name else ""
-            ranked.append((score, reason, f"{display_name}{row_text}\nPIC={pic}", counseling_related))
-
-        next_link = first_visible(
-            page,
-            [
-                "a:has-text('Next')",
-                "a[title*='Next' i]",
-                "a:text-is('>')",
-            ],
-        )
-        if not next_link:
-            break
-        try:
-            next_link.click()
-            page.wait_for_load_state("domcontentloaded", timeout=7000)
-            page_num += 1
-        except Exception:
-            break
-
-    if not ranked:
+def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchReview:
+    rows = get_result_rows(page)
+    if not rows:
         return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
 
+    ranked: list[tuple[int, str, str, str, bool]] = []
+    for row in rows[:12]:
+        try:
+            score, reason, row_text, extracted_pic, counseling_related, _ = open_and_score_detail(page, row)
+        except Exception as exc:
+            row_text = row.inner_text().strip()
+            score, reason, counseling_related = analyze_credential(row_text=row_text, detail_text=row_text)
+            reason = f"{reason}; detail check error: {exc}"
+            extracted_pic = extract_pic(row_text)
+
+        pic = extracted_pic or extract_pic(row_text)
+        ranked.append((score, reason, row_text, pic, counseling_related))
+
+        # Early return when we have a strong counseling-related hit with a PIC.
+        if counseling_related and pic and score >= 220:
+            return MatchReview(first_name, last_name, "LIKELY_MATCH", pic, f"{row_text}\nPIC={pic}", reason)
+
     ranked.sort(key=lambda x: x[0], reverse=True)
-    _, best_reason, best_entry, best_is_counseling = ranked[0]
-    best_pic = extract_pic(best_entry)
+    _, best_reason, best_row_text, best_pic, best_is_counseling = ranked[0]
 
     if not best_pic:
-        return MatchReview(first_name, last_name, "NOT_FOUND", "", best_entry, best_reason)
+        return MatchReview(first_name, last_name, "NOT_FOUND", "", best_row_text, best_reason)
 
     status = "REVIEW_REQUIRED"
     if best_pic and best_is_counseling:
         status = "LIKELY_MATCH"
-    elif best_pic:
-        status = "REVIEW_REQUIRED"
 
-    return MatchReview(first_name, last_name, status, best_pic, best_entry, best_reason)
+    return MatchReview(first_name, last_name, status, best_pic, f"{best_row_text}\nPIC={best_pic}", best_reason)
 
 
 def lookup_name(page: Page, name: NameRecord) -> MatchReview:
@@ -396,22 +334,7 @@ def lookup_name(page: Page, name: NameRecord) -> MatchReview:
             time.sleep(0.2)
     fill_search_form(page, name.first_name, name.last_name)
     run_search(page)
-    result = choose_best_match(page, name.first_name, name.last_name)
-    if result.status != "NOT_FOUND":
-        return result
-
-    # Fallback for nickname mismatches: last-name-only search with same first initial.
-    fill_search_form(page, "", name.last_name)
-    run_search(page)
-    fallback = choose_best_match(
-        page,
-        name.first_name,
-        name.last_name,
-        expected_initial=(name.first_name[0] if name.first_name else None),
-    )
-    if fallback.pic:
-        fallback.status = "NO_FULL_NAME_MATCH"
-    return fallback
+    return choose_best_match(page, name.first_name, name.last_name)
 
 
 def run_lookup(
