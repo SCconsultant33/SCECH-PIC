@@ -36,6 +36,8 @@ run_clicked = st.button("Run Lookup", type="primary", disabled=uploaded_file is 
 
 if "last_results" not in st.session_state:
     st.session_state.last_results = []
+if "current_run_results" not in st.session_state:
+    st.session_state.current_run_results = []
 
 
 def to_csv_bytes(rows: list[MatchReview]) -> bytes:
@@ -63,18 +65,28 @@ if run_clicked and uploaded_file is not None:
     except Exception as exc:
         st.error(f"Could not parse CSV: {exc}")
     else:
+        st.session_state.current_run_results = []
         progress = st.progress(0)
         status = st.empty()
 
         def on_progress(current: int, total: int, result: MatchReview) -> None:
             progress.progress(current / total)
             status.info(f"{current}/{total} complete: {result.first_name} {result.last_name} -> {result.status} {result.pic}")
+            st.session_state.current_run_results.append(result)
+            st.session_state.last_results = st.session_state.current_run_results[:]
 
-        with st.spinner("Running lookup automation..."):
-            rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
-            st.session_state.last_results = rows
+        try:
+            with st.spinner("Running lookup automation..."):
+                rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
+                st.session_state.last_results = rows
+            status.success("Lookup run complete.")
+        except Exception as exc:
+            status.error(f"Run interrupted: {exc}")
+            if st.session_state.current_run_results:
+                st.warning("Showing partial results collected before interruption.")
+                st.session_state.last_results = st.session_state.current_run_results[:]
 
-        status.success("Lookup run complete.")
+        st.session_state.current_run_results = []
 
 if st.session_state.last_results:
     table_rows = [
