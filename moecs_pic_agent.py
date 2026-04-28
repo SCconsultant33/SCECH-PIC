@@ -351,13 +351,12 @@ def open_and_score_detail(page: Page, row: Locator) -> tuple[int, str, str, str,
 
 def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchReview:
     ranked: list[tuple[bool, int, int, str, str, str, bool]] = []
-    max_pages = 6
+    max_pages = 15
     page_num = 1
     while page_num <= max_pages:
         rows = get_result_rows(page)
         if not rows and page_num == 1:
             return MatchReview(first_name, last_name, "NOT_FOUND", "", "", "No matching rows returned")
-        page_signature = rows[0].inner_text().strip() if rows else ""
         for row in rows:
             try:
                 score, reason, row_text, extracted_pic, counseling_related, detail_text = open_and_score_detail(page, row)
@@ -376,10 +375,6 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
             reason = f"{reason}; priority_bucket={priority_bucket}"
             ranked.append((bool(pic), priority_bucket, score, reason, row_text, pic, counseling_related))
 
-            # Highest-priority hit found: current school counseling credential with PIC.
-            if pic and priority_bucket == 0:
-                return MatchReview(first_name, last_name, "LIKELY_MATCH", pic, f"{row_text}\nPIC={pic}", reason)
-
         next_link = first_visible(
             page,
             [
@@ -393,10 +388,6 @@ def choose_best_match(page: Page, first_name: str, last_name: str) -> MatchRevie
         try:
             next_link.click()
             page.wait_for_load_state("domcontentloaded", timeout=7000)
-            next_rows = get_result_rows(page)
-            next_signature = next_rows[0].inner_text().strip() if next_rows else ""
-            if next_signature == page_signature:
-                break
             page_num += 1
         except Exception:
             break
