@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+from pathlib import Path
 
 import streamlit as st
 
@@ -13,6 +14,7 @@ from moecs_pic_agent import MatchReview, parse_names_from_reader, run_lookup
 
 
 st.set_page_config(page_title="MOECS PIC Lookup", layout="wide")
+CHECKPOINT_PATH = Path("/tmp/moecs_last_results.csv")
 
 required_key = os.getenv("APP_ACCESS_KEY", "").strip()
 if required_key:
@@ -62,6 +64,31 @@ def to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
+def write_checkpoint(rows: list[dict[str, str]]) -> None:
+    try:
+        CHECKPOINT_PATH.write_bytes(to_csv_bytes(rows))
+    except Exception:
+        pass
+
+
+def load_checkpoint() -> list[dict[str, str]]:
+    if not CHECKPOINT_PATH.exists():
+        return []
+    try:
+        text = CHECKPOINT_PATH.read_text(encoding="utf-8")
+        reader = csv.DictReader(io.StringIO(text))
+        return list(reader)
+    except Exception:
+        return []
+
+
+if not st.session_state.last_results:
+    restored = load_checkpoint()
+    if restored:
+        st.session_state.last_results = restored
+        st.session_state.last_results_csv = to_csv_bytes(restored)
+
+
 if run_clicked and uploaded_file is not None:
     try:
         text = uploaded_file.getvalue().decode("utf-8-sig")
@@ -69,6 +96,10 @@ if run_clicked and uploaded_file is not None:
     except Exception as exc:
         st.error(f"Could not parse CSV: {exc}")
     else:
+        try:
+            CHECKPOINT_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
         st.session_state.current_run_results = []
         progress = st.progress(0)
         status = st.empty()
@@ -79,18 +110,22 @@ if run_clicked and uploaded_file is not None:
             st.session_state.current_run_results.append(review_to_dict(result))
             st.session_state.last_results = st.session_state.current_run_results[:]
             st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+            write_checkpoint(st.session_state.last_results)
 
         try:
             with st.spinner("Running lookup automation..."):
                 rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
                 st.session_state.last_results = [review_to_dict(r) for r in rows]
                 st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+                write_checkpoint(st.session_state.last_results)
             status.success("Lookup run complete.")
         except Exception as exc:
             status.error(f"Run interrupted: {exc}")
             if st.session_state.current_run_results:
                 st.warning("Showing partial results collected before interruption.")
                 st.session_state.last_results = st.session_state.current_run_results[:]
+                st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+                write_checkpoint(st.session_state.last_results)
 
         st.session_state.current_run_results = []
 
