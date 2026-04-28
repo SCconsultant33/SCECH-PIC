@@ -38,23 +38,27 @@ if "last_results" not in st.session_state:
     st.session_state.last_results = []
 if "current_run_results" not in st.session_state:
     st.session_state.current_run_results = []
+if "last_results_csv" not in st.session_state:
+    st.session_state.last_results_csv = b""
 
 
-def to_csv_bytes(rows: list[MatchReview]) -> bytes:
+def review_to_dict(row: MatchReview) -> dict[str, str]:
+    return {
+        "first_name": row.first_name,
+        "last_name": row.last_name,
+        "status": row.status,
+        "pic": row.pic,
+        "reason": row.reason,
+        "matched_entry": row.matched_entry,
+    }
+
+
+def to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=["first_name", "last_name", "status", "pic", "reason", "matched_entry"])
     writer.writeheader()
     for row in rows:
-        writer.writerow(
-            {
-                "first_name": row.first_name,
-                "last_name": row.last_name,
-                "status": row.status,
-                "pic": row.pic,
-                "reason": row.reason,
-                "matched_entry": row.matched_entry,
-            }
-        )
+        writer.writerow(row)
     return buf.getvalue().encode("utf-8")
 
 
@@ -72,13 +76,15 @@ if run_clicked and uploaded_file is not None:
         def on_progress(current: int, total: int, result: MatchReview) -> None:
             progress.progress(current / total)
             status.info(f"{current}/{total} complete: {result.first_name} {result.last_name} -> {result.status} {result.pic}")
-            st.session_state.current_run_results.append(result)
+            st.session_state.current_run_results.append(review_to_dict(result))
             st.session_state.last_results = st.session_state.current_run_results[:]
+            st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
 
         try:
             with st.spinner("Running lookup automation..."):
                 rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
-                st.session_state.last_results = rows
+                st.session_state.last_results = [review_to_dict(r) for r in rows]
+                st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
             status.success("Lookup run complete.")
         except Exception as exc:
             status.error(f"Run interrupted: {exc}")
@@ -91,11 +97,11 @@ if run_clicked and uploaded_file is not None:
 if st.session_state.last_results:
     table_rows = [
         {
-            "first_name": r.first_name,
-            "last_name": r.last_name,
-            "status": r.status,
-            "pic": r.pic,
-            "reason": r.reason,
+            "first_name": r["first_name"],
+            "last_name": r["last_name"],
+            "status": r["status"],
+            "pic": r["pic"],
+            "reason": r["reason"],
         }
         for r in st.session_state.last_results
     ]
@@ -103,8 +109,9 @@ if st.session_state.last_results:
     st.dataframe(table_rows, use_container_width=True)
     st.download_button(
         "Download full results CSV",
-        data=to_csv_bytes(st.session_state.last_results),
+        data=st.session_state.last_results_csv or to_csv_bytes(st.session_state.last_results),
         file_name="pic_lookup_results.csv",
         mime="text/csv",
+        key="download_results_csv",
     )
     st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")
