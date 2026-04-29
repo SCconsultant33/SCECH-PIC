@@ -94,9 +94,6 @@ if not st.session_state.last_results:
         st.session_state.last_results_csv = to_csv_bytes(restored)
 
 
-continue_clicked = st.button("Continue Next Chunk", disabled=not st.session_state.pending_names)
-
-
 def run_chunk(chunk: list[dict[str, str]]) -> None:
     names = [NameRecord(first_name=r["first_name"], last_name=r["last_name"]) for r in chunk]
     progress = st.progress(0)
@@ -146,14 +143,11 @@ if run_clicked and uploaded_file is not None:
         st.session_state.pending_names = [{"first_name": n.first_name, "last_name": n.last_name} for n in names]
         st.session_state.total_names = len(names)
 
-        first_chunk = st.session_state.pending_names[: int(chunk_size)]
-        st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
-        run_chunk(first_chunk)
-
-if continue_clicked and st.session_state.pending_names:
-    next_chunk = st.session_state.pending_names[: int(chunk_size)]
-    st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
-    run_chunk(next_chunk)
+        with st.spinner("Processing all chunks..."):
+            while st.session_state.pending_names:
+                next_chunk = st.session_state.pending_names[: int(chunk_size)]
+                st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
+                run_chunk(next_chunk)
 
 if st.session_state.last_results:
     table_rows = [
@@ -180,5 +174,5 @@ if st.session_state.last_results:
 if st.session_state.pending_names:
     st.info(
         f"{len(st.session_state.last_results)}/{st.session_state.total_names} processed. "
-        f"{len(st.session_state.pending_names)} entries remain. Click **Continue Next Chunk** to keep going."
+        f"{len(st.session_state.pending_names)} entries remain."
     )
