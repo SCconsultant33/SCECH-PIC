@@ -10,7 +10,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from moecs_pic_agent import MatchReview, parse_names_from_reader, run_lookup
+from moecs_pic_agent import MatchReview, NameRecord, parse_names_from_reader, run_lookup
 
 
 st.set_page_config(page_title="MOECS PIC Lookup", layout="wide")
@@ -34,6 +34,7 @@ if is_hosted:
 else:
     headful = st.checkbox("Show browser while running", value=False)
 slow_mo_ms = st.number_input("Slow motion (milliseconds)", min_value=0, max_value=3000, value=0, step=100)
+chunk_size = st.number_input("Chunk size (entries per run)", min_value=5, max_value=100, value=20, step=5)
 run_clicked = st.button("Run Lookup", type="primary", disabled=uploaded_file is None)
 
 if "last_results" not in st.session_state:
@@ -42,6 +43,10 @@ if "current_run_results" not in st.session_state:
     st.session_state.current_run_results = []
 if "last_results_csv" not in st.session_state:
     st.session_state.last_results_csv = b""
+if "pending_names" not in st.session_state:
+    st.session_state.pending_names = []
+if "total_names" not in st.session_state:
+    st.session_state.total_names = 0
 
 
 def review_to_dict(row: MatchReview) -> dict[str, str]:
@@ -89,6 +94,41 @@ if not st.session_state.last_results:
         st.session_state.last_results_csv = to_csv_bytes(restored)
 
 
+continue_clicked = st.button("Continue Next Chunk", disabled=not st.session_state.pending_names)
+
+
+def run_chunk(chunk: list[dict[str, str]]) -> None:
+    names = [NameRecord(first_name=r["first_name"], last_name=r["last_name"]) for r in chunk]
+    progress = st.progress(0)
+    status = st.empty()
+    completed_before = len(st.session_state.last_results)
+    total = st.session_state.total_names or (completed_before + len(names))
+
+    def on_progress(current: int, _: int, result: MatchReview) -> None:
+        overall_done = completed_before + current
+        progress.progress(overall_done / total)
+        status.info(f"{overall_done}/{total} complete: {result.first_name} {result.last_name} -> {result.status} {result.pic}")
+        st.session_state.current_run_results.append(review_to_dict(result))
+        st.session_state.last_results = st.session_state.current_run_results[:]
+        st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+        write_checkpoint(st.session_state.last_results)
+
+    try:
+        with st.spinner("Running lookup automation..."):
+            run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
+            st.session_state.last_results = st.session_state.current_run_results[:]
+            st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+            write_checkpoint(st.session_state.last_results)
+        status.success("Chunk complete.")
+    except Exception as exc:
+        status.error(f"Run interrupted: {exc}")
+        if st.session_state.current_run_results:
+            st.warning("Showing partial results collected before interruption.")
+            st.session_state.last_results = st.session_state.current_run_results[:]
+            st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
+            write_checkpoint(st.session_state.last_results)
+
+
 if run_clicked and uploaded_file is not None:
     try:
         text = uploaded_file.getvalue().decode("utf-8-sig")
@@ -101,33 +141,19 @@ if run_clicked and uploaded_file is not None:
         except Exception:
             pass
         st.session_state.current_run_results = []
-        progress = st.progress(0)
-        status = st.empty()
+        st.session_state.last_results = []
+        st.session_state.last_results_csv = b""
+        st.session_state.pending_names = [{"first_name": n.first_name, "last_name": n.last_name} for n in names]
+        st.session_state.total_names = len(names)
 
-        def on_progress(current: int, total: int, result: MatchReview) -> None:
-            progress.progress(current / total)
-            status.info(f"{current}/{total} complete: {result.first_name} {result.last_name} -> {result.status} {result.pic}")
-            st.session_state.current_run_results.append(review_to_dict(result))
-            st.session_state.last_results = st.session_state.current_run_results[:]
-            st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
-            write_checkpoint(st.session_state.last_results)
+        first_chunk = st.session_state.pending_names[: int(chunk_size)]
+        st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
+        run_chunk(first_chunk)
 
-        try:
-            with st.spinner("Running lookup automation..."):
-                rows = run_lookup(names, headful=headful, slow_mo_ms=int(slow_mo_ms), progress_callback=on_progress)
-                st.session_state.last_results = [review_to_dict(r) for r in rows]
-                st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
-                write_checkpoint(st.session_state.last_results)
-            status.success("Lookup run complete.")
-        except Exception as exc:
-            status.error(f"Run interrupted: {exc}")
-            if st.session_state.current_run_results:
-                st.warning("Showing partial results collected before interruption.")
-                st.session_state.last_results = st.session_state.current_run_results[:]
-                st.session_state.last_results_csv = to_csv_bytes(st.session_state.last_results)
-                write_checkpoint(st.session_state.last_results)
-
-        st.session_state.current_run_results = []
+if continue_clicked and st.session_state.pending_names:
+    next_chunk = st.session_state.pending_names[: int(chunk_size)]
+    st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
+    run_chunk(next_chunk)
 
 if st.session_state.last_results:
     table_rows = [
@@ -150,3 +176,9 @@ if st.session_state.last_results:
         key="download_results_csv",
     )
     st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")
+
+if st.session_state.pending_names:
+    st.info(
+        f"{len(st.session_state.last_results)}/{st.session_state.total_names} processed. "
+        f"{len(st.session_state.pending_names)} entries remain. Click **Continue Next Chunk** to keep going."
+    )

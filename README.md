@@ -57,6 +57,7 @@ python -m streamlit run app.py
 ```
 
 Then open the URL Streamlit prints (usually `http://localhost:8501`), upload your CSV, and click **Run Lookup**.
+For larger lists (50+ names), use chunked runs in the UI by setting **Chunk size** and clicking **Continue Next Chunk** until all rows are processed.
 
 ### Windows shortcut launcher
 
