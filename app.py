@@ -7,6 +7,7 @@ import csv
 import io
 import os
 from pathlib import Path
+import time
 
 import streamlit as st
 
@@ -47,6 +48,8 @@ if "pending_names" not in st.session_state:
     st.session_state.pending_names = []
 if "total_names" not in st.session_state:
     st.session_state.total_names = 0
+if "auto_continue" not in st.session_state:
+    st.session_state.auto_continue = False
 
 
 def review_to_dict(row: MatchReview) -> dict[str, str]:
@@ -142,12 +145,12 @@ if run_clicked and uploaded_file is not None:
         st.session_state.last_results_csv = b""
         st.session_state.pending_names = [{"first_name": n.first_name, "last_name": n.last_name} for n in names]
         st.session_state.total_names = len(names)
+        st.session_state.auto_continue = True
 
-        with st.spinner("Processing all chunks..."):
-            while st.session_state.pending_names:
-                next_chunk = st.session_state.pending_names[: int(chunk_size)]
-                st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
-                run_chunk(next_chunk)
+        next_chunk = st.session_state.pending_names[: int(chunk_size)]
+        st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
+        run_chunk(next_chunk)
+        st.rerun()
 
 if st.session_state.last_results:
     table_rows = [
@@ -176,3 +179,13 @@ if st.session_state.pending_names:
         f"{len(st.session_state.last_results)}/{st.session_state.total_names} processed. "
         f"{len(st.session_state.pending_names)} entries remain."
     )
+
+if st.session_state.auto_continue and st.session_state.pending_names:
+    st.caption("Continuing with next chunk automatically...")
+    time.sleep(0.8)
+    next_chunk = st.session_state.pending_names[: int(chunk_size)]
+    st.session_state.pending_names = st.session_state.pending_names[int(chunk_size) :]
+    run_chunk(next_chunk)
+    st.rerun()
+elif st.session_state.auto_continue and not st.session_state.pending_names:
+    st.session_state.auto_continue = False
