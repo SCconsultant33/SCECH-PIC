@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import html
 import io
 import os
 from pathlib import Path
@@ -70,6 +72,11 @@ def to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
     for row in rows:
         writer.writerow(row)
     return buf.getvalue().encode("utf-8")
+
+
+def csv_data_uri(csv_bytes: bytes) -> str:
+    encoded = base64.b64encode(csv_bytes).decode("ascii")
+    return f"data:text/csv;charset=utf-8;base64,{encoded}"
 
 
 def write_checkpoint(rows: list[dict[str, str]]) -> None:
@@ -165,12 +172,20 @@ if st.session_state.last_results:
     ]
     st.subheader("Results")
     st.dataframe(table_rows, use_container_width=True)
+    csv_bytes = st.session_state.last_results_csv or to_csv_bytes(st.session_state.last_results)
     st.download_button(
         "Download full results CSV",
-        data=st.session_state.last_results_csv or to_csv_bytes(st.session_state.last_results),
+        data=csv_bytes,
         file_name="pic_lookup_results.csv",
         mime="text/csv",
         key="download_results_csv",
+        on_click="ignore",
+    )
+    st.markdown(
+        f'<a download="pic_lookup_results.csv" href="{html.escape(csv_data_uri(csv_bytes))}">'
+        "Direct CSV download link"
+        "</a>",
+        unsafe_allow_html=True,
     )
     st.caption("Rows marked REVIEW_REQUIRED should be manually checked before use.")
 
